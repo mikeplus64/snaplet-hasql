@@ -4,7 +4,6 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
 {-# LANGUAGE OverloadedStrings      #-}
-{-# LANGUAGE RankNTypes             #-}
 module Snap.Snaplet.Hasql
   ( HasPool(..)
   , hasqlInit
@@ -41,20 +40,21 @@ hasqlInit cx p =
 {-# INLINE session #-}
 -- | Wrapper around 'session' that just calls 'fail' on failure, and
 -- uses the available 'poolLens'. Most useful inside 'Handler`s.
-session :: (HasPool v db, MonadReader v m) => Session db m r -> m r
+session :: (HasPool v db, MonadReader v m, MonadIO m)
+        => Session db IO r -> m r
 session f = do
   db <- view poolLens
-  r  <- Hasql.session db f
+  r  <- liftIO (Hasql.session db f)
   case r of
     Right a -> return a
     Left er -> fail (show er)
 
 {-# INLINE session' #-}
 -- | Wrapper around 'session'.
-session' :: (HasPool v db, MonadReader v m)
-         => Session db m r
+session' :: (HasPool v db, MonadReader v m, MonadIO m)
+         => Session db IO r
          -> m (Either (SessionError db) r)
 session' f = do
   db <- view poolLens
-  Hasql.session db f
+  liftIO (Hasql.session db f)
 
