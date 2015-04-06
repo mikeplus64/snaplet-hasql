@@ -38,10 +38,8 @@ hasqlInit cx p =
     return pool
 
 {-# INLINE session #-}
--- | Wrapper around 'session' that just calls 'fail' on failure, and
--- uses the available 'poolLens'. Most useful inside 'Handler`s.
-session :: (HasPool v db, MonadReader v m, MonadIO m)
-        => Session db IO r -> m r
+-- | Wrapper around 'session' that calls 'fail' on failure.
+session :: HasPool v db => Session db IO r -> Handler b v r
 session f = do
   db <- view poolLens
   r  <- liftIO (Hasql.session db f)
@@ -51,9 +49,9 @@ session f = do
 
 {-# INLINE session' #-}
 -- | Wrapper around 'session'.
-session' :: (HasPool v db, MonadReader v m, MonadIO m)
+session' :: HasPool v db
          => Session db IO r
-         -> m (Either (SessionError db) r)
+         -> Handler b v (Either (SessionError db) r)
 session' f = do
   db <- view poolLens
   liftIO (Hasql.session db f)
