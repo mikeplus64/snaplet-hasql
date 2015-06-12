@@ -1,5 +1,5 @@
 name:                snaplet-hasql
-version:             0.0.2
+version:             0.0.3
 synopsis:            A Hasql snaplet
 license:             MIT
 license-file:        LICENSE
@@ -11,7 +11,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Snap.Snaplet.Hasql
-  build-depends:       base >=4.7 && <4.8, 
+  build-depends:       base >=4.7 && <5.0, 
                        lens >=4.7 && <5.0, 
                        mtl >=2.2 && <2.3, 
                        hasql >=0.7 && <0.8, 
