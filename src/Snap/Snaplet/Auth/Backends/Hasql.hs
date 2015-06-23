@@ -57,7 +57,7 @@ import qualified Data.Text.Read       as T
 import           Data.Time
 import           GHC.Generics
 import           Hasql
-import           Hasql.Backend        (CxTx, CxValue)
+import           Hasql.Backend        (CxTx, CxValue, TxError, CxError)
 import           Paths_snaplet_hasql
 import           Prelude
 import           Snap
@@ -72,7 +72,7 @@ newtype HasqlAuthManager s = HasqlAuthManager { pool :: Pool s }
 -- | Initializer for the postgres backend to the auth snaplet.
 --
 initHasqlAuth
-  :: (CxTx s, CxAuthUser s)
+  :: (CxTx s, Show (CxError s), Show (TxError s), CxAuthUser s)
   => SnapletLens b SessionManager -- ^ Lens to the session snaplet
   -> Snaplet (Pool s)             -- ^ The hasql snaplet
   -> SnapletInit b (AuthManager b)
@@ -106,22 +106,22 @@ defAuthTable =
   [stmt|CREATE TABLE IF NOT EXISTS snap_auth_user
     ( uid                 SERIAL      PRIMARY KEY
     , login               text        UNIQUE NOT NULL
-    , email               text        NOT NULL
-    , password            text        NOT NULL
-    , activated_at        timestamptz NOT NULL
-    , suspended_at        timestamptz NOT NULL
-    , remember_token      text        NOT NULL
+    , email               text        
+    , password            text
+    , activated_at        timestamptz
+    , suspended_at        timestamptz 
+    , remember_token      text        
     , login_count         integer     NOT NULL
     , failed_login_count  integer     NOT NULL
-    , locked_out_until    timestamptz NOT NULL
-    , current_login_at    timestamptz NOT NULL
-    , last_login_at       timestamptz NOT NULL
-    , current_login_ip    text        NOT NULL
-    , last_login_ip       text        NOT NULL
-    , created_at          timestamptz NOT NULL
-    , updated_at          timestamptz NOT NULL
-    , reset_token         text        NOT NULL
-    , reset_requested_at  timestamptz NOT NULL
+    , locked_out_until    timestamptz 
+    , current_login_at    timestamptz 
+    , last_login_at       timestamptz 
+    , current_login_ip    text        
+    , last_login_ip       text        
+    , created_at          timestamptz 
+    , updated_at          timestamptz 
+    , reset_token         text        
+    , reset_requested_at  timestamptz 
     , user_meta           json        NOT NULL
     )
   |]
@@ -130,32 +130,31 @@ type CxAuthUser c = ( CxValue c Text
                     , CxValue c (Maybe Text)
                     , CxValue c (Maybe UTCTime)
                     , CxValue c Int
-                    , CxValue c Integer
                     , CxValue c ByteString
                     , CxValue c (Maybe ByteString)
                     , CxValue c Value)
 
 userFromTuple
-  ( Just . UserId -> userId, userLogin, userEmail
-  , Just . Encrypted -> userPassword, userActivatedAt, userSuspendedAt
-  , userRememberToken, userLoginCount, userFailedLoginCount
+  ( Just . UserId . T.pack . (show :: Int -> String) -> userId, userLogin
+  , userEmail, Just . Encrypted -> userPassword, userActivatedAt
+  , userSuspendedAt, userRememberToken, userLoginCount, userFailedLoginCount
   , userLockedOutUntil, userCurrentLoginAt, userLastLoginAt
   , userCurrentLoginIp, userLastLoginIp, userCreatedAt, userUpdatedAt
   , userResetToken, userResetRequestedAt, Object userMeta) =
   AuthUser{userRoles = [], ..}
+
 
 saveQuery :: CxAuthUser c => AuthUser -> Tx c s AuthUser
 saveQuery u@AuthUser{..} =
   userFromTuple <$> singleEx (maybe insertQuery updateQuery userId)
  where
   -- YIKES
-  passwordToBS (Encrypted bs) = bs
-  passwordToBS (ClearText bs) = error "Cannot save a ClearText password!"
+  passwordToText :: Password -> Text
+  passwordToText (Encrypted bs) = T.decodeUtf8 bs
+  passwordToText (ClearText bs) = error "Cannot save a ClearText password!"
 
-  fromPassword = case userPassword of
-    Just (Encrypted _) -> Encrypted
-    Just (ClearText _) -> ClearText
-    Nothing            -> Encrypted
+  fromPassword :: ByteString -> Password
+  fromPassword = Encrypted
 
   -- no userRoles - should there be?
 
@@ -164,7 +163,7 @@ saveQuery u@AuthUser{..} =
           VALUES(default,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?)
           RETURNING snap_auth_user.* |]
 
-    userLogin userEmail (fmap passwordToBS userPassword)
+    userLogin userEmail (fmap passwordToText userPassword)
     userActivatedAt userSuspendedAt userRememberToken userLoginCount
     userFailedLoginCount userLockedOutUntil userCurrentLoginAt
     userLastLoginAt userCurrentLoginIp userLastLoginIp userCreatedAt
@@ -192,51 +191,67 @@ saveQuery u@AuthUser{..} =
             , user_meta           = ?
           WHERE uid = ?
           RETURNING snap_auth_user.* |]
-     userLogin userEmail (fmap passwordToBS userPassword)
+     userLogin userEmail (fmap passwordToText userPassword)
      userActivatedAt userSuspendedAt userRememberToken userLoginCount
      userFailedLoginCount userLockedOutUntil userCurrentLoginAt
      userLastLoginAt userCurrentLoginIp userLastLoginIp userCreatedAt
      userUpdatedAt userResetToken userResetRequestedAt (Object userMeta)
      (text2int (unUid uid))
 
-instance (CxTx s, CxAuthUser s) => IAuthBackend (HasqlAuthManager s) where
-  save HasqlAuthManager{..} u@AuthUser{..} =
-    either (\_ -> Left BackendError) Right <$>
-    Hasql.session pool (tx readMode (saveQuery u))
+hideError :: (Show (TxError c), Show (CxError c))
+          => Either (SessionError c) a -> IO (Either AuthFailure a)
+hideError = either (\e -> print e >> pure (Left BackendError)) (pure . Right)
 
-  lookupByUserId HasqlAuthManager{..} (UserId uid) =
+instance (CxTx s, Show (CxError s), Show (TxError s), CxAuthUser s) =>
+         IAuthBackend (HasqlAuthManager s) where
+  save HasqlAuthManager{..} u = do
+    print u
+    hideError =<< Hasql.session pool (tx writeMode (saveQuery u))
+
+  lookupByUserId HasqlAuthManager{..} (UserId uid) = do
+    putStrLn "lookupByUserId"
     either (const Nothing) (fmap userFromTuple) <$>
-    Hasql.session pool (tx readMode (maybeEx query))
+      Hasql.session pool (tx readMode (maybeEx query))
    where
     query = [stmt|SELECT * FROM snap_auth_user WHERE snap_auth_user.uid = ?|]
             (text2int uid)
 
-  lookupByLogin HasqlAuthManager{..} login =
-    either (const Nothing) (fmap userFromTuple) <$>
-    Hasql.session pool (tx readMode (maybeEx query))
+  lookupByLogin HasqlAuthManager{..} login = do
+    putStrLn "lookupByLogin"
+    r <- either (const Nothing) (fmap userFromTuple) <$>
+      Hasql.session pool (tx readMode (maybeEx query))
+    print ("thing", r)
+    return r
    where
     query = [stmt|SELECT * FROM snap_auth_user WHERE snap_auth_user.login = ?|]
             login
 
-  lookupByRememberToken HasqlAuthManager{..} rt =
+  lookupByRememberToken HasqlAuthManager{..} rt = do
+    putStrLn "lookupByRememberToken"
     either (const Nothing) (fmap userFromTuple) <$>
-    Hasql.session pool (tx readMode (maybeEx query))
+      Hasql.session pool (tx readMode (maybeEx query))
    where
     query = [stmt|SELECT * FROM snap_auth_user
                   WHERE snap_auth_user.remember_token = ?|] rt
 
   destroy HasqlAuthManager{..}
-          AuthUser{userId = Just (UserId (text2int -> uid))} =
+          AuthUser{userId = Just (UserId (text2int -> uid))} = do
+    print uid
     void $
       Hasql.session pool (tx (Just (ReadUncommitted, Just True))
                              (unitEx $ [stmt|DELETE FROM snap_auth_user
                                              WHERE uid = ?|] uid))
 
 readMode :: TxMode
-readMode = Just (RepeatableReads, Nothing)
+readMode = Just (Serializable, Nothing)
 
-text2int :: Text -> Integer
-text2int = either (error "text2int: Can't parse") fst . T.decimal
+writeMode :: TxMode
+writeMode = Just (Serializable, Just True)
+
+text2int :: Text -> Int
+text2int t =
+  either (\a -> error ("text2int: Can't parse " ++ show t)) fst
+         (T.decimal t)
 
 txMode :: TxMode
 txMode = Just (RepeatableReads, Just True)
