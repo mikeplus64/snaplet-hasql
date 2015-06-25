@@ -28,7 +28,6 @@ library
                        mtl >=2.2, 
                        hasql >=0.7,
                        hasql-backend >= 0.4,
-                       hasql-postgres >= 0.11,
                        clientsession >= 0.9,
                        configurator >= 0.3,
                        time >= 1.5,
