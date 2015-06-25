@@ -29,20 +29,23 @@ instance (Cx db, CxTx db, Show (CxError db), Show (TxError db)) =>
          HasPool (Pool db) db where
   poolLens = id
 
+dataDir :: Maybe (IO FilePath)
+dataDir = Just (fmap (++ "/resources") getDataDir)
+
 initHasql
   :: HasPool c db
   => CxSettings db
   -> SnapletInit c (Pool db)
 initHasql cx =
-  makeSnaplet "hasql" "" (Just getDataDir) $ do
-    poolSettings <- getPoolSettings =<< getSnapletUserConfig
-    pool         <- liftIO (acquirePool cx poolSettings)
+  makeSnaplet "hasql" "" dataDir $ do
+    ps   <- getPoolSettings =<< getSnapletUserConfig
+    pool <- liftIO (acquirePool cx ps)
     onUnload (releasePool pool)
     return pool
 
 getPoolSettings cfg = (\(Just a) -> a) <$> liftIO (poolSettings
-  <$> C.require cfg "max-connections"
-  <*> C.require cfg "connection-timeout")
+  <$> C.require cfg "maxConnections"
+  <*> C.require cfg "connectionTimeout")
 
 initHasql'
   :: HasPool c db
@@ -51,7 +54,7 @@ initHasql'
   -> SnapletInit c (Pool db)
 initHasql' cx Nothing  = error "initHasql: Incorrect poolSettings parameters."
 initHasql' cx (Just p) =
-  makeSnaplet "hasql" "" (Just getDataDir) $ do
+  makeSnaplet "hasql" "" dataDir $ do
     pool <- liftIO (acquirePool cx p)
     onUnload (releasePool pool)
     return pool
