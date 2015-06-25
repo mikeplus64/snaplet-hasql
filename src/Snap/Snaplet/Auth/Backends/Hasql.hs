@@ -1,5 +1,6 @@
 {-# LANGUAGE ConstraintKinds      #-}
 {-# LANGUAGE DeriveGeneric        #-}
+{-# LANGUAGE FlexibleContexts     #-}
 {-# LANGUAGE GADTs                #-}
 {-# LANGUAGE OverloadedStrings    #-}
 {-# LANGUAGE QuasiQuotes          #-}
@@ -10,9 +11,10 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns         #-}
 {-|
+Adapted from "snaplet-postgresql-simple"\'s auth module.
 
 This module allows you to use the auth snaplet with your user database stored
-in a PostgreSQL database.  When you run your application with this snaplet, a
+in a Hasql database.  When you run your application with this snaplet, a
 config file will be copied into the the @snaplets/hasql-auth@ directory.
 This file contains all of the configurable options for the snaplet and allows
 you to change them without recompiling your application.
@@ -29,13 +31,10 @@ snaplets as follows:
 
 Then in your initializer you'll have something like this:
 
-> d <- nestSnaplet "db" db pgsInit
+> d <- nestSnaplet "db" db $ hasqlInit
 > a <- nestSnaplet "auth" auth $ initHasqlAuth sess d
 
-If you have not already created the database table for users, it will
-automatically be created for you the first time you run your application.
-
-Adapted from snaplet-postgresql-simple.
+A database table @snap_auth_users@ for users is created on initialisation.
 
 -}
 module Snap.Snaplet.Auth.Backends.Hasql where
@@ -47,9 +46,7 @@ import           Control.Monad.Trans
 import           Data.Aeson
 import           Data.ByteString      (ByteString)
 import qualified Data.ByteString      as B
-import qualified Data.Configurator    as C
 import           Data.Foldable        (fold)
-import qualified Data.HashMap.Lazy    as HM
 import           Data.Text            (Text)
 import qualified Data.Text            as T
 import qualified Data.Text.Encoding   as T
@@ -57,7 +54,7 @@ import qualified Data.Text.Read       as T
 import           Data.Time
 import           GHC.Generics
 import           Hasql
-import           Hasql.Backend        (CxTx, CxValue, TxError, CxError)
+import           Hasql.Backend        (CxError, CxTx, CxValue, TxError)
 import           Paths_snaplet_hasql
 import           Prelude
 import           Snap
@@ -83,7 +80,7 @@ initHasqlAuth sess db = makeSnaplet "hasql-auth" desc datadir $ do
     key <- getKey (asSiteKey authSettings)
     let pool    = db^#snapletValue
         manager = HasqlAuthManager pool
-    Hasql.session pool (tx txMode (unitEx defAuthTable))
+    Hasql.session pool (tx writeMode (unitEx defAuthTable))
     rng <- mkRNG
     return AuthManager
       { backend               = manager
@@ -106,22 +103,22 @@ defAuthTable =
   [stmt|CREATE TABLE IF NOT EXISTS snap_auth_user
     ( uid                 SERIAL      PRIMARY KEY
     , login               text        UNIQUE NOT NULL
-    , email               text        
+    , email               text
     , password            text
     , activated_at        timestamptz
-    , suspended_at        timestamptz 
-    , remember_token      text        
+    , suspended_at        timestamptz
+    , remember_token      text
     , login_count         integer     NOT NULL
     , failed_login_count  integer     NOT NULL
-    , locked_out_until    timestamptz 
-    , current_login_at    timestamptz 
-    , last_login_at       timestamptz 
-    , current_login_ip    text        
-    , last_login_ip       text        
-    , created_at          timestamptz 
-    , updated_at          timestamptz 
-    , reset_token         text        
-    , reset_requested_at  timestamptz 
+    , locked_out_until    timestamptz
+    , current_login_at    timestamptz
+    , last_login_at       timestamptz
+    , current_login_ip    text
+    , last_login_ip       text
+    , created_at          timestamptz
+    , updated_at          timestamptz
+    , reset_token         text
+    , reset_requested_at  timestamptz
     , user_meta           json        NOT NULL
     )
   |]
@@ -142,7 +139,6 @@ userFromTuple
   , userCurrentLoginIp, userLastLoginIp, userCreatedAt, userUpdatedAt
   , userResetToken, userResetRequestedAt, Object userMeta) =
   AuthUser{userRoles = [], ..}
-
 
 saveQuery :: CxAuthUser c => AuthUser -> Tx c s AuthUser
 saveQuery u@AuthUser{..} =
@@ -198,36 +194,34 @@ saveQuery u@AuthUser{..} =
      userUpdatedAt userResetToken userResetRequestedAt (Object userMeta)
      (text2int (unUid uid))
 
+-- there ought to be a way to not have to "hide" the error like this... or at
+-- least a way to log an error from here
 hideError :: (Show (TxError c), Show (CxError c))
           => Either (SessionError c) a -> IO (Either AuthFailure a)
-hideError = either (\e -> print e >> pure (Left BackendError)) (pure . Right)
+hideError = either
+  (\e -> print e >> pure (Left BackendError))
+  (pure . Right)
 
 instance (CxTx s, Show (CxError s), Show (TxError s), CxAuthUser s) =>
          IAuthBackend (HasqlAuthManager s) where
-  save HasqlAuthManager{..} u = do
-    print u
+  save HasqlAuthManager{..} u =
     hideError =<< Hasql.session pool (tx writeMode (saveQuery u))
 
-  lookupByUserId HasqlAuthManager{..} (UserId uid) = do
-    putStrLn "lookupByUserId"
+  lookupByUserId HasqlAuthManager{..} (UserId uid) =
     either (const Nothing) (fmap userFromTuple) <$>
       Hasql.session pool (tx readMode (maybeEx query))
    where
     query = [stmt|SELECT * FROM snap_auth_user WHERE snap_auth_user.uid = ?|]
             (text2int uid)
 
-  lookupByLogin HasqlAuthManager{..} login = do
-    putStrLn "lookupByLogin"
-    r <- either (const Nothing) (fmap userFromTuple) <$>
+  lookupByLogin HasqlAuthManager{..} login =
+    either (const Nothing) (fmap userFromTuple) <$>
       Hasql.session pool (tx readMode (maybeEx query))
-    print ("thing", r)
-    return r
    where
     query = [stmt|SELECT * FROM snap_auth_user WHERE snap_auth_user.login = ?|]
             login
 
-  lookupByRememberToken HasqlAuthManager{..} rt = do
-    putStrLn "lookupByRememberToken"
+  lookupByRememberToken HasqlAuthManager{..} rt =
     either (const Nothing) (fmap userFromTuple) <$>
       Hasql.session pool (tx readMode (maybeEx query))
    where
@@ -235,12 +229,10 @@ instance (CxTx s, Show (CxError s), Show (TxError s), CxAuthUser s) =>
                   WHERE snap_auth_user.remember_token = ?|] rt
 
   destroy HasqlAuthManager{..}
-          AuthUser{userId = Just (UserId (text2int -> uid))} = do
-    print uid
-    void $
-      Hasql.session pool (tx (Just (ReadUncommitted, Just True))
-                             (unitEx $ [stmt|DELETE FROM snap_auth_user
-                                             WHERE uid = ?|] uid))
+          AuthUser{userId = Just (UserId (text2int -> uid))} =
+    void (Hasql.session pool
+          (tx writeMode
+           (unitEx ([stmt|DELETE FROM snap_auth_user WHERE uid = ?|] uid))))
 
 readMode :: TxMode
 readMode = Just (Serializable, Nothing)
@@ -253,5 +245,3 @@ text2int t =
   either (\a -> error ("text2int: Can't parse " ++ show t)) fst
          (T.decimal t)
 
-txMode :: TxMode
-txMode = Just (RepeatableReads, Just True)
