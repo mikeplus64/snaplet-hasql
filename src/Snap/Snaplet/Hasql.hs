@@ -12,6 +12,7 @@ module Snap.Snaplet.Hasql
   , session'
   , module H
   ) where
+import           Control.Applicative
 import           Control.Lens
 import           Control.Monad.Reader
 import qualified Data.Configurator    as C

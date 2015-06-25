@@ -46,7 +46,6 @@ import           Control.Monad.Trans
 import           Data.Aeson
 import           Data.ByteString      (ByteString)
 import qualified Data.ByteString      as B
-import           Data.Foldable        (fold)
 import           Data.Text            (Text)
 import qualified Data.Text            as T
 import qualified Data.Text.Encoding   as T
@@ -56,7 +55,6 @@ import           GHC.Generics
 import           Hasql
 import           Hasql.Backend        (CxError, CxTx, CxValue, TxError)
 import           Paths_snaplet_hasql
-import           Prelude
 import           Snap
 import           Snap.Snaplet.Auth
 import           Snap.Snaplet.Session
@@ -94,7 +92,7 @@ initHasqlAuth sess db = makeSnaplet "hasql-auth" desc datadir $ do
       , randomNumberGenerator = rng
       })
  where
-  desc    = "A Hasql backend for user authentication"
+  desc = "A Hasql backend for user authentication"
   datadir = Just (fmap (++"/resources/auth") getDataDir)
 
 -- | Default authentication table layout
