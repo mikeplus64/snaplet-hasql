@@ -8,10 +8,16 @@ maintainer:          eleventynine@gmail.com
 category:            Web
 build-type:          Simple
 cabal-version:       >=1.10
+description:         A hasql snaplet, including an auth backend.
+homepage:            https://github.com/mikeplus64/snaplet-hasql
 
 data-files:
   resources/devel.cfg
   resources/auth/devel.cfg
+
+source-repository head
+  type:     git
+  location: https://github.com/mikeplus64/snaplet-hasql.git
 
 library
   exposed-modules:     Snap.Snaplet.Hasql,
